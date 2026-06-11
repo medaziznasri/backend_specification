@@ -38,6 +38,13 @@ def create_refresh_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def create_reset_token(data: dict, expires_minutes: int = 30):
+
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    to_encode.update({"exp": expire, "type": "reset"})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 def decode_access_token(token: str) -> dict:
 
     try:

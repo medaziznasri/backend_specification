@@ -47,7 +47,7 @@ async def get_all_question_ids(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @router.get("/questions/{answer_id}/subquestion", response_model=List[schemas.QuestionForClient])
-async def get_subquestions_by_answer(
+def get_subquestions_by_answer(
     answer_id: uuid.UUID,
     db: Session = Depends(get_db)
 ):
@@ -58,7 +58,7 @@ async def get_subquestions_by_answer(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/questions/{question_id}/subquestion/text", response_model=List[schemas.QuestionForClient])
-async def get_subquestions_by_text(
+def get_subquestions_by_text(
     question_id: uuid.UUID,
     value: str = Query(""),
     db: Session = Depends(get_db)
@@ -72,7 +72,7 @@ async def get_subquestions_by_text(
 @router.get("/specification/questions/{specifications_session_id}",
     response_model=List[schemas.QuestionForClient],
 )
-async def get_session_questions(
+def get_session_questions(
     specifications_session_id: uuid.UUID,
     db: Session = Depends(get_db),
 ):

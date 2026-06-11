@@ -104,6 +104,13 @@ class UserCreate(UserBase):
 
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
 class UserOut(UserBase):
 
     id: int
