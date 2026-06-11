@@ -202,33 +202,15 @@ FRONTEND_URL = (
 )
 
 
-def _send_reset_email(to_email: str, reset_url: str) -> bool:
-    """Send the reset link by email. Returns False if SMTP isn't configured
-    or the send fails (the caller decides what to do)."""
-    import smtplib, ssl
-    from email.message import EmailMessage
-
-    host = (os.getenv("SMTP_HOST") or "").strip()
-    port = (os.getenv("SMTP_PORT") or "").strip()
-    user = (os.getenv("SMTP_USER") or "").strip()
-    # App passwords are shown with spaces for readability but must be sent
-    # without them — strip all whitespace so a pasted value still works.
-    password = "".join((os.getenv("SMTP_PASSWORD") or "").split())
-    sender = (os.getenv("SMTP_FROM") or user or "").strip()
-    if not (host and port and user and password):
-        return False
-    try:
-        msg = EmailMessage()
-        msg["Subject"] = "Réinitialisation de votre mot de passe"
-        msg["From"] = sender
-        msg["To"] = to_email
-        msg.set_content(
-            "Vous avez demandé à réinitialiser votre mot de passe.\n\n"
-            f"Cliquez sur ce lien (valable 30 minutes) :\n{reset_url}\n\n"
-            "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email."
-        )
-        msg.add_alternative(
-            f"""\
+def _build_reset_email(reset_url: str) -> tuple[str, str, str]:
+    """Returns (subject, plain_text, html)."""
+    subject = "Réinitialisation de votre mot de passe"
+    text = (
+        "Vous avez demandé à réinitialiser votre mot de passe.\n\n"
+        f"Cliquez sur ce lien (valable 30 minutes) :\n{reset_url}\n\n"
+        "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email."
+    )
+    html = f"""\
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1e293b">
   <h2 style="margin:0 0 8px;font-size:20px">Réinitialisation du mot de passe</h2>
   <p style="color:#475569;line-height:1.6">
@@ -248,18 +230,78 @@ def _send_reset_email(to_email: str, reset_url: str) -> bool:
   <p style="color:#94a3b8;font-size:12px">
     Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.
   </p>
-</div>""",
-            subtype="html",
+</div>"""
+    return subject, text, html
+
+
+def _send_via_brevo(to_email: str, subject: str, html: str) -> bool:
+    """Send via Brevo's HTTP API (HTTPS, port 443) — works on hosts that block
+    outbound SMTP (e.g. Render free tier)."""
+    import json as _json
+    import urllib.request
+
+    api_key = (os.getenv("BREVO_API_KEY") or "").strip()
+    sender = (os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "").strip()
+    if not (api_key and sender):
+        return False
+    try:
+        body = _json.dumps({
+            "sender": {"email": sender, "name": "Specification"},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.brevo.com/v3/smtp/email",
+            data=body,
+            method="POST",
+            headers={"api-key": api_key, "Content-Type": "application/json", "accept": "application/json"},
         )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status in (200, 201)
+    except Exception as e:
+        logger.error(f"Brevo send failed for {to_email}: {e}")
+        return False
+
+
+def _send_via_smtp(to_email: str, subject: str, text: str, html: str) -> bool:
+    """SMTP fallback (works locally; blocked on Render free tier). Has a short
+    timeout so it fails fast instead of hanging the request."""
+    import smtplib, ssl
+    from email.message import EmailMessage
+
+    host = (os.getenv("SMTP_HOST") or "").strip()
+    port = (os.getenv("SMTP_PORT") or "").strip()
+    user = (os.getenv("SMTP_USER") or "").strip()
+    password = "".join((os.getenv("SMTP_PASSWORD") or "").split())
+    sender = (os.getenv("SMTP_FROM") or user or "").strip()
+    if not (host and port and user and password):
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = to_email
+        msg.set_content(text)
+        msg.add_alternative(html, subtype="html")
         ctx = ssl.create_default_context()
-        with smtplib.SMTP(host, int(port)) as server:
+        with smtplib.SMTP(host, int(port), timeout=15) as server:
             server.starttls(context=ctx)
             server.login(user, password)
             server.send_message(msg)
         return True
     except Exception as e:
-        logger.error(f"Failed to send reset email to {to_email}: {e}")
+        logger.error(f"SMTP send failed for {to_email}: {e}")
         return False
+
+
+def _send_reset_email(to_email: str, reset_url: str) -> bool:
+    """Send the reset link. Prefers the Brevo HTTP API (works on Render), then
+    falls back to SMTP (local dev). Returns False if neither is configured."""
+    subject, text, html = _build_reset_email(reset_url)
+    if _send_via_brevo(to_email, subject, html):
+        return True
+    return _send_via_smtp(to_email, subject, text, html)
 
 
 @router.post("/forgot-password")
