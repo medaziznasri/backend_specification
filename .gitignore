@@ -1,0 +1,9 @@
+__pycache__
+test_hash.py
+apdate_permissions.py
+fix_fk_session_categories.py
+storage 
+check_db.py
+BACKEND_STARTUP_GUIDE.md
+database_fix_comprehensive.sql
+DATABASE_FIX_GUIDE.md
