@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Enum
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Enum, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, backref
 from app.core.database import Base
@@ -154,6 +154,8 @@ class GeneratedSpecificationDocument(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("client_specification_sessions.id"), index=True)
     file_path = Column(String)
     content_summary = Column(String)
+    # PDF bytes stored in the DB so they survive Render's ephemeral filesystem.
+    file_data = Column(LargeBinary, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ClientSpecificationSession", back_populates="pdfs")
