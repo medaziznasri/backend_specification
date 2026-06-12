@@ -414,7 +414,7 @@ def generate_pdf_background_task(db_factory, session_id: uuid.UUID):
         session = db.query(models.ClientSpecificationSession).filter_by(id=session_id).options(
             joinedload(models.ClientSpecificationSession.project_type),
             selectinload(models.ClientSpecificationSession.answers).options(
-                joinedload(models.ClientAnswer.question)
+                joinedload(models.ClientAnswer.question).joinedload(models.Question.category)
             )
         ).first()
 
@@ -438,11 +438,23 @@ def generate_pdf_background_task(db_factory, session_id: uuid.UUID):
             log_to_task_file(f"Processing {len(answers_list)} answers...")
 
         for ans in answers_list:
-            label = ans.question.label if ans.question else "Question inconnue"
+            q = ans.question
+            cat = q.category if q else None
+            label = q.label if q else "Question inconnue"
             val = ans.value if ans.value else "Non répondu"
-            structured_answers.append({"question": label, "answer": val})
-            if ans.question and ans.question.category_id:
-                category_ids.add(ans.question.category_id)
+            structured_answers.append({
+                "question": label,
+                "answer": val,
+                "qid": str(q.id) if q else None,
+                "parent_id": str(q.parent_question_id) if (q and q.parent_question_id) else None,
+                "order": (q.display_order if q else 0) or 0,
+                # Used to order questions exactly like the client form
+                # (display_order, then general category first, then name).
+                "is_general": bool(cat.is_general) if cat else False,
+                "category": (cat.name if cat else "") or "",
+            })
+            if q and q.category_id:
+                category_ids.add(q.category_id)
 
         all_categories = []
         if category_ids:
