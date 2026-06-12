@@ -197,7 +197,7 @@ def _serialize_session(session, user_email: str, user_name: str) -> dict:
             {
                 "id": str(pdf.id),
                 "created_at": pdf.created_at.isoformat() if pdf.created_at else None,
-                "pdf_url": f"/files/{os.path.basename(pdf.file_path)}",
+                "pdf_url": f"/api/client/specification/pdf/{pdf.id}",
                 "content_summary": pdf.content_summary,
             }
             for pdf in session.pdfs
@@ -269,7 +269,7 @@ def get_user_sessions(db: Session, user_id: int) -> dict:
                 "pdfs": [
                     {
                         "id": str(pdf.id),
-                        "pdf_url": f"/files/{os.path.basename(pdf.file_path)}",
+                        "pdf_url": f"/api/client/specification/pdf/{pdf.id}",
                     }
                     for pdf in session.pdfs
                 ]
@@ -337,7 +337,7 @@ def get_session_details(db: Session, session_id: uuid.UUID) -> dict:
             {
                 "id": str(pdf.id),
                 "created_at": pdf.created_at.isoformat() if pdf.created_at else None,
-                "pdf_url": f"/files/{os.path.basename(pdf.file_path)}",
+                "pdf_url": f"/api/client/specification/pdf/{pdf.id}",
                 "content_summary": pdf.content_summary,
             }
             for pdf in session.pdfs
@@ -472,10 +472,20 @@ def generate_pdf_background_task(db_factory, session_id: uuid.UUID):
         log_to_task_file(f"Physical PDF generation completed in {duration:.2f}s.")
 
         log_to_task_file("Finalizing database records...")
+        # Read the generated file into memory so we can persist it in the DB
+        # (Render's disk is ephemeral and wipes files on restart/redeploy).
+        pdf_bytes = None
+        try:
+            with open(file_path, "rb") as _f:
+                pdf_bytes = _f.read()
+        except Exception as _e:
+            log_to_task_file(f"Warning: could not read PDF bytes for DB storage: {_e}")
+
         new_doc = models.GeneratedSpecificationDocument(
             id=uuid.uuid4(),
             session_id=session.id,
             file_path=file_path,
+            file_data=pdf_bytes,
             content_summary=f"Technical spec with {len(structured_answers)} answers."
         )
         db.add(new_doc)
@@ -531,7 +541,7 @@ def get_session_status(db: Session, session_id: uuid.UUID) -> dict:
 
         sorted_pdfs = sorted(session.pdfs, key=lambda x: x.created_at, reverse=True)
         if sorted_pdfs:
-             latest_pdf_url = f"/files/{os.path.basename(sorted_pdfs[0].file_path)}"
+             latest_pdf_url = f"/api/client/specification/pdf/{sorted_pdfs[0].id}"
 
     return {
         "id": str(session.id),
