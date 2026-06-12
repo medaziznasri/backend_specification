@@ -17,15 +17,32 @@ INK = (33, 37, 41)
 PRIMARY = (52, 73, 94)
 HEADER_BG = (44, 62, 80)
 MUTED = (130, 140, 150)
-STRIPE = (245, 247, 250)
+SUBQ = (90, 116, 140)  # sub-question label color (lighter than PRIMARY)
+
+
+# Common Unicode punctuation that isn't in Latin-1 → clean ASCII equivalents,
+# so dashes/quotes/etc. don't turn into "?".
+_PUNCT = {
+    "–": "-", "—": "-",          # en / em dash
+    "‘": "'", "’": "'",          # smart single quotes
+    "“": '"', "”": '"',          # smart double quotes
+    "…": "...",                        # ellipsis
+    " ": " ", " ": " ",          # (narrow) non-breaking space
+    "•": "-",                          # bullet
+    "€": "EUR",                        # euro sign
+}
 
 
 def _safe(text: str) -> str:
-    """Core PDF fonts are Latin-1 only. Replace anything outside that range so
-    generation never crashes on Arabic/emoji/other unsupported characters."""
+    """Core PDF fonts are Latin-1 only. Normalize common typographic
+    characters to ASCII, then replace anything still unsupported so generation
+    never crashes on Arabic/emoji/other characters."""
     if text is None:
         return ""
-    return str(text).encode("latin-1", "replace").decode("latin-1")
+    s = str(text)
+    for bad, good in _PUNCT.items():
+        s = s.replace(bad, good)
+    return s.encode("latin-1", "replace").decode("latin-1")
 
 
 def _format_answer(val) -> str:
@@ -46,6 +63,47 @@ def _format_answer(val) -> str:
     if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
         s = s[1:-1]
     return s if s else "Non repondu"
+
+
+def _flatten_hierarchy(items):
+    """Order answers so triggered sub-questions sit under their parent.
+    Returns a list of (item, depth, number) where number is like '1', '1.1'.
+    Works whether or not the items carry qid/parent_id (falls back to flat)."""
+    has_hierarchy = any(it.get("qid") for it in items)
+    if not has_hierarchy:
+        return [(it, 0, str(i)) for i, it in enumerate(items, 1)]
+
+    by_id = {it["qid"]: it for it in items if it.get("qid")}
+    children: dict = {}
+    roots = []
+    for it in items:
+        pid = it.get("parent_id")
+        if pid and pid in by_id:
+            children.setdefault(pid, []).append(it)
+        else:
+            roots.append(it)
+
+    def order_key(it):
+        # Mirror the client form order: display_order first, then the general
+        # category before others, then category name (stable tie-break).
+        return (
+            it.get("order") or 0,
+            0 if it.get("is_general") else 1,
+            (it.get("category") or "").lower(),
+        )
+
+    roots.sort(key=order_key)
+    result = []
+
+    def walk(it, depth, number):
+        result.append((it, depth, number))
+        kids = sorted(children.get(it.get("qid"), []), key=order_key)
+        for j, kid in enumerate(kids, 1):
+            walk(kid, depth + 1, f"{number}.{j}")
+
+    for i, root in enumerate(roots, 1):
+        walk(root, 0, str(i))
+    return result
 
 
 class SpecPDF(FPDF):
@@ -109,30 +167,43 @@ def generate_physical_pdf(structured_answers, file_path, session_id, project_met
         pdf.cell(0, 8, _safe("Specifications detaillees"), ln=True)
         pdf.ln(2)
 
-        rows = []
-        for item in structured_answers:
-            q = _safe(item.get("question", ""))
-            a = _safe(_format_answer(item.get("answer", "")))
-            rows.append((q, a))
+        ordered = _flatten_hierarchy(list(structured_answers))
 
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*INK)
+        pdf.set_draw_color(220, 224, 229)
+        # Reset fill to white so the title-band color doesn't leak into the table.
+        pdf.set_fill_color(255, 255, 255)
         headings_style = FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=PRIMARY)
+        question_style = FontFace(emphasis="BOLD", color=PRIMARY)
+        subq_style = FontFace(emphasis="BOLD", color=SUBQ)
 
         with pdf.table(
             width=pdf.epw,
-            col_widths=(42, 58),
+            col_widths=(45, 55),
             text_align=("LEFT", "LEFT"),
-            line_height=6,
+            line_height=7,
+            padding=2.5,
             headings_style=headings_style,
-            cell_fill_color=STRIPE,
+            cell_fill_color=(247, 249, 251),
             cell_fill_mode="ROWS",
-            borders_layout="MINIMAL",
+            borders_layout="ALL",
         ) as table:
             table.row(["Question", "Reponse"])  # repeats on each page automatically
-            if rows:
-                for q, a in rows:
-                    table.row([q, a])
+            if ordered:
+                for item, depth, number in ordered:
+                    q = _safe(item.get("question", ""))
+                    a = _safe(_format_answer(item.get("answer", "")))
+                    if depth > 0:
+                        # Indent sub-questions and mark them with an arrow.
+                        label = f"{'    ' * depth}> {number}  {q}"
+                        style = subq_style
+                    else:
+                        label = f"{number}.  {q}"
+                        style = question_style
+                    row = table.row()
+                    row.cell(label, style=style)
+                    row.cell(a)
             else:
                 table.row(["Aucune reponse", "-"])
 
